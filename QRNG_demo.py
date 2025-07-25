@@ -1,47 +1,51 @@
 import tkinter as tk
-from tkinter import scrolledtext, filedialog, messagebox
-import numpy as np
 import matplotlib.pyplot as plt
-from math import log2
+import numpy as np
 import random
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from math import log2
 
-# Core QRNG Simulation Functions
+# --- PHYSICS + SIGNAL LAYER ---
 
-def simulate_photon_polarization(num_photons):
-    return [random.choice(['0', '1']) for _ in range(num_photons)]
+def emit_photons(n):
+    """Simulate photon pulses randomly going to either S or P detector."""
+    return [random.choice(['S', 'P']) for _ in range(n)]
 
-def simulate_photodiode_signals(bits):
-    data = []
-    for bit in bits:
-        if bit == '0':
-            d0 = np.random.uniform(0.8, 1.0)
-            d1 = np.random.uniform(0.0, 0.2)
+def generate_photodiode_signals(photon_paths):
+    """Simulate analog signals based on photon detection."""
+    analog_data = []
+    for path in photon_paths:
+        if path == 'S':
+            dS = np.random.uniform(0.8, 1.0)
+            dP = np.random.uniform(0.0, 0.2)
         else:
-            d0 = np.random.uniform(0.0, 0.2)
-            d1 = np.random.uniform(0.8, 1.0)
-        data.append((d0, d1))
-    return data
+            dS = np.random.uniform(0.0, 0.2)
+            dP = np.random.uniform(0.8, 1.0)
+        analog_data.append((dS, dP))
+    return analog_data
 
-def generate_bits_from_signals(data):
+def arduino_logic(analog_data):
+    """Simulate Arduino signal comparison logic."""
     bits = []
-    for d0, d1 in data:
-        if abs(d0 - d1) < 0.05:
-            continue
-        bits.append('0' if d0 > d1 else '1')
+    for dS, dP in analog_data:
+        if abs(dS - dP) < 0.05:
+            continue  # Discard coincidence
+        bits.append('0' if dS > dP else '1')
     return bits
 
-def von_neumann_extractor(bits):
-    output = []
+def von_neumann(bits):
+    """Von Neumann extractor to remove bias."""
+    result = []
     for i in range(0, len(bits) - 1, 2):
         a, b = bits[i], bits[i+1]
         if a != b:
-            output.append('0' if (a, b) == ('0', '1') else '1')
-    return output
+            result.append('0' if a == '0' else '1')
+    return result
 
 def calculate_entropy(bits, window=100):
     entropies = []
     for i in range(0, len(bits) - window + 1, window):
-        segment = bits[i:i+window]
+        segment = bits[i:i + window]
         p0 = segment.count('0') / window
         p1 = segment.count('1') / window
         if p0 > 0 and p1 > 0:
@@ -51,71 +55,111 @@ def calculate_entropy(bits, window=100):
         entropies.append(entropy)
     return entropies
 
-def plot_entropy(entropies, title):
-    plt.figure(figsize=(8, 4))
-    plt.plot(entropies, marker='o')
-    plt.title(title)
-    plt.xlabel("Window Index")
-    plt.ylabel("Entropy")
-    plt.ylim(0, 1.05)
-    plt.grid(True)
-    plt.show()
+# --- GUI SIMULATOR ---
 
-
-class QRNG_GUI:
+class QRNGApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Quantum Random Number Generator (QRNG) Simulator")
+        self.root.title("QRNG Visualization Simulator")
+        self.root.geometry("1000x700")
 
-        self.num_photons = tk.IntVar(value=1000)
+        self.photons = 500
         self.raw_bits = []
-        self.post_bits = []
+        self.processed_bits = []
+        self.paths = []
 
-        # Layout
-        tk.Label(root, text="Number of Photons:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
-        tk.Entry(root, textvariable=self.num_photons).grid(row=0, column=1, padx=5, pady=5)
+        # Photon emission
+        tk.Label(root, text="Number of Photons:").pack()
+        self.entry = tk.Entry(root)
+        self.entry.insert(0, "500")
+        self.entry.pack()
 
-        tk.Button(root, text="Generate Random Bits", command=self.run_simulation).grid(row=0, column=2, padx=5)
-        tk.Button(root, text="Plot Entropy", command=self.plot_entropy_graphs).grid(row=0, column=3, padx=5)
-        tk.Button(root, text="Save Bitstream", command=self.save_bitstream).grid(row=0, column=4, padx=5)
+        tk.Button(root, text="Run Simulation", command=self.run_simulation).pack(pady=5)
 
-        self.output_box = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=100, height=20)
-        self.output_box.grid(row=1, column=0, columnspan=5, padx=10, pady=10)
+        # Photon flow output
+        self.canvas = tk.Canvas(root, width=900, height=250, bg='white')
+        self.canvas.pack(pady=10)
+
+        # Bitstream output
+        self.bit_label = tk.Label(root, text="Raw Bits:")
+        self.bit_label.pack()
+        self.bit_box = tk.Text(root, height=5, width=120)
+        self.bit_box.pack()
+
+        # Entropy plot
+        self.fig, self.ax = plt.subplots(figsize=(7, 3))
+        self.plot_canvas = FigureCanvasTkAgg(self.fig, master=root)
+        self.plot_canvas.get_tk_widget().pack()
+
+    def draw_photon_paths(self):
+        self.canvas.delete("all")
+        self.canvas.create_rectangle(60, 110, 90, 140, fill="red")  # Laser
+        self.canvas.create_text(75, 100, text="Laser", font=("Arial", 8))
+
+        self.canvas.create_line(90, 125, 160, 125, fill="red", width=2)  # Beam
+        self.canvas.create_rectangle(160, 105, 190, 145, fill="lightgray")  # Polarizer
+        self.canvas.create_text(175, 95, text="45° Polarizer", font=("Arial", 8))
+
+        self.canvas.create_line(190, 125, 250, 125, fill="red", width=2)  # Beam to PBS
+        self.canvas.create_rectangle(250, 105, 280, 145, fill="cyan")  # PBS
+        self.canvas.create_text(265, 95, text="PBS", font=("Arial", 8))
+
+        for i, path in enumerate(self.paths[:30]):  # Show only first 30 photons
+            x = 250
+            y = 125
+            if path == 'P':
+                end_x = 350
+                end_y = 125
+                color = "green"
+            else:
+                end_x = 265
+                end_y = 50
+                color = "orange"
+            self.canvas.create_oval(x-2, y-2, x+2, y+2, fill=color)
+            self.canvas.create_line(x, y, end_x, end_y, fill=color, width=1)
+
+        self.canvas.create_oval(345, 120, 355, 130, fill="green")  # P-detector
+        self.canvas.create_text(355, 140, text="P", font=("Arial", 8))
+
+        self.canvas.create_oval(260, 45, 270, 55, fill="orange")  # S-detector
+        self.canvas.create_text(275, 45, text="S", font=("Arial", 8))
 
     def run_simulation(self):
-        n = self.num_photons.get()
-        self.output_box.delete(1.0, tk.END)
-        self.output_box.insert(tk.END, f"Simulating {n} photons...\n")
+        try:
+            self.photons = int(self.entry.get())
+        except:
+            self.photons = 500
 
-        bitstream = simulate_photon_polarization(n)
-        analog_signals = simulate_photodiode_signals(bitstream)
-        self.raw_bits = generate_bits_from_signals(analog_signals)
-        self.post_bits = von_neumann_extractor(self.raw_bits)
+        self.paths = emit_photons(self.photons)
+        signals = generate_photodiode_signals(self.paths)
+        self.raw_bits = arduino_logic(signals)
+        self.processed_bits = von_neumann(self.raw_bits)
 
-        self.output_box.insert(tk.END, f"Raw Bits ({len(self.raw_bits)}):\n{''.join(self.raw_bits[:100])}...\n\n")
-        self.output_box.insert(tk.END, f"Post-Processed Bits ({len(self.post_bits)}):\n{''.join(self.post_bits[:100])}...\n\n")
-        self.output_box.insert(tk.END, f"Simulation complete.\n")
+        # Update bit display
+        self.bit_box.delete("1.0", tk.END)
+        self.bit_box.insert(tk.END, f"Raw Bits:   {''.join(self.raw_bits[:100])}...\n")
+        self.bit_box.insert(tk.END, f"Post Bits:  {''.join(self.processed_bits[:100])}...\n")
+        self.bit_box.insert(tk.END, f"Raw Count: {len(self.raw_bits)} | Post-Processed Count: {len(self.processed_bits)}")
 
-    def plot_entropy_graphs(self):
-        if not self.raw_bits:
-            messagebox.showwarning("Warning", "Run the simulation first.")
-            return
+        # Redraw photon paths
+        self.draw_photon_paths()
+
+        # Plot entropy
         raw_entropy = calculate_entropy(self.raw_bits)
-        post_entropy = calculate_entropy(self.post_bits)
-        plot_entropy(raw_entropy, "Entropy of Raw Bitstream")
-        plot_entropy(post_entropy, "Entropy of Post-Processed Bitstream")
+        post_entropy = calculate_entropy(self.processed_bits)
+        self.ax.clear()
+        self.ax.plot(raw_entropy, label="Raw Entropy", color='blue')
+        self.ax.plot(post_entropy, label="Post-Processed Entropy", color='green')
+        self.ax.set_ylim(0, 1.05)
+        self.ax.set_title("Entropy Graph")
+        self.ax.set_ylabel("Entropy")
+        self.ax.set_xlabel("Window Index")
+        self.ax.legend()
+        self.plot_canvas.draw()
 
-    def save_bitstream(self):
-        if not self.post_bits:
-            messagebox.showwarning("Warning", "No data to save.")
-            return
-        file_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt")])
-        if file_path:
-            with open(file_path, 'w') as f:
-                f.write(''.join(self.post_bits))
-            messagebox.showinfo("Success", f"Saved to {file_path}")
 
+# --- Run the App ---
 if __name__ == "__main__":
     root = tk.Tk()
-    app = QRNG_GUI(root)
+    app = QRNGApp(root)
     root.mainloop()
