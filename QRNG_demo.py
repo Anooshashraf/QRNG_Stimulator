@@ -14,9 +14,9 @@ if platform.system() == "Windows":
 else:
     import os
 
-# Optional: enable Arduino mode if needed
+
 ENABLE_ARDUINO = False
-ARDUINO_PORT = 'COM3'  # Change this to match your port
+ARDUINO_PORT = 'COM3'  
 BAUD_RATE = 9600
 
 try:
