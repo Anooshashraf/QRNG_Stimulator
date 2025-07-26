@@ -14,9 +14,9 @@ if platform.system() == "Windows":
 else:
     import os
 
-# Optional: enable Arduino mode if needed
+
 ENABLE_ARDUINO = False
-ARDUINO_PORT = 'COM3'  # Change this to match your port
+ARDUINO_PORT = 'COM3' 
 BAUD_RATE = 9600
 
 try:
@@ -26,8 +26,6 @@ try:
 except Exception as e:
     print("Arduino not connected:", e)
     ENABLE_ARDUINO = False
-
-# ------------------ Simulator Starts Here ------------------
 
 class Photon:
     def __init__(self, canvas, path):
@@ -73,6 +71,21 @@ class QRNGApp:
 
         tk.Button(control_frame, text="Start Simulation", command=self.start_simulation).pack(side=tk.LEFT)
 
+        # Photon processed counter
+        self.counter_var = tk.StringVar(value="Photons Processed: 0")
+        self.counter_label = tk.Label(control_frame, textvariable=self.counter_var)
+        self.counter_label.pack(side=tk.LEFT, padx=10)
+
+        self.bit_box = tk.Text(root, height=3, width=100)
+        self.bit_box.pack()
+
+        self.status = tk.StringVar()
+        tk.Label(root, textvariable=self.status).pack()
+
+        # Plotting area
+        self.fig, self.ax = plt.subplots(figsize=(6, 2.5))
+        self.canvas_plot = FigureCanvasTkAgg(self.fig, master=root)
+        self.canvas_plot.get_tk_widget().pack()
         self.bit_box = tk.Text(root, height=3, width=100)
         self.bit_box.pack()
 
@@ -113,7 +126,7 @@ class QRNGApp:
 
     def simulate_photons(self):
         for i in range(self.count):
-            delay = random.randint(30, 100)  # Arrival randomness
+            delay = random.randint(30, 100) 
             time.sleep(delay / 1000)
 
             if ENABLE_ARDUINO:
@@ -138,6 +151,7 @@ class QRNGApp:
                     self.bitstream.append(bit)
                     self.update_bitstream_display()
                     self.play_beep()
+                    self.counter_var.set(f"Photons Processed: {i + 1}")
                     break
                 time.sleep(0.005)  # Increased photon speed
 
@@ -189,8 +203,6 @@ class QRNGApp:
         self.ax.legend()
         self.canvas_plot.draw()
 
-
-# Run it
 if __name__ == "__main__":
     root = tk.Tk()
     app = QRNGApp(root)
