@@ -1,164 +1,196 @@
 import tkinter as tk
-import matplotlib.pyplot as plt
-import numpy as np
 import random
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+import time
+import threading
+import platform
 from math import log2
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
-# --- PHYSICS + SIGNAL LAYER ---
+# Windows beep support
+if platform.system() == "Windows":
+    import winsound
+else:
+    import os
 
-def emit_photons(n):
-    """Simulate photon pulses randomly going to either S or P detector."""
-    return [random.choice(['S', 'P']) for _ in range(n)]
+# Optional: enable Arduino mode if needed
+ENABLE_ARDUINO = False
+ARDUINO_PORT = 'COM3'  # Change this to match your port
+BAUD_RATE = 9600
 
-def generate_photodiode_signals(photon_paths):
-    """Simulate analog signals based on photon detection."""
-    analog_data = []
-    for path in photon_paths:
-        if path == 'S':
-            dS = np.random.uniform(0.8, 1.0)
-            dP = np.random.uniform(0.0, 0.2)
+try:
+    if ENABLE_ARDUINO:
+        import serial
+        arduino = serial.Serial(ARDUINO_PORT, BAUD_RATE, timeout=1)
+except Exception as e:
+    print("Arduino not connected:", e)
+    ENABLE_ARDUINO = False
+
+# ------------------ Simulator Starts Here ------------------
+
+class Photon:
+    def __init__(self, canvas, path):
+        self.canvas = canvas
+        self.path = path
+        self.x, self.y = 60, 125
+        self.id = canvas.create_oval(self.x-3, self.y-3, self.x+3, self.y+3, fill="red")
+
+    def move_step(self):
+        if self.x < 190:
+            dx, dy = 6, 0
+        elif self.x < 250:
+            dx, dy = 6, 0
+        elif self.path == 'P':
+            dx, dy = 6, 0
         else:
-            dS = np.random.uniform(0.0, 0.2)
-            dP = np.random.uniform(0.8, 1.0)
-        analog_data.append((dS, dP))
-    return analog_data
-
-def arduino_logic(analog_data):
-    """Simulate Arduino signal comparison logic."""
-    bits = []
-    for dS, dP in analog_data:
-        if abs(dS - dP) < 0.05:
-            continue  # Discard coincidence
-        bits.append('0' if dS > dP else '1')
-    return bits
-
-def von_neumann(bits):
-    """Von Neumann extractor to remove bias."""
-    result = []
-    for i in range(0, len(bits) - 1, 2):
-        a, b = bits[i], bits[i+1]
-        if a != b:
-            result.append('0' if a == '0' else '1')
-    return result
-
-def calculate_entropy(bits, window=100):
-    entropies = []
-    for i in range(0, len(bits) - window + 1, window):
-        segment = bits[i:i + window]
-        p0 = segment.count('0') / window
-        p1 = segment.count('1') / window
-        if p0 > 0 and p1 > 0:
-            entropy = -(p0 * log2(p0) + p1 * log2(p1))
-        else:
-            entropy = 0
-        entropies.append(entropy)
-    return entropies
-
-# --- GUI SIMULATOR ---
+            dx, dy = 0, -6
+        self.canvas.move(self.id, dx, dy)
+        self.x += dx
+        self.y += dy
 
 class QRNGApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("QRNG Visualization Simulator")
-        self.root.geometry("1000x700")
+        self.root.title("Quantum Random Number Generator - Enhanced")
 
-        self.photons = 500
-        self.raw_bits = []
-        self.processed_bits = []
-        self.paths = []
+        self.bitstream = []
+        self.post_bits = []
 
-        # Photon emission
-        tk.Label(root, text="Number of Photons:").pack()
-        self.entry = tk.Entry(root)
-        self.entry.insert(0, "500")
-        self.entry.pack()
+        self.canvas = tk.Canvas(root, width=850, height=300, bg="white")
+        self.canvas.pack()
 
-        tk.Button(root, text="Run Simulation", command=self.run_simulation).pack(pady=5)
+        self.setup_circuit()
 
-        # Photon flow output
-        self.canvas = tk.Canvas(root, width=900, height=250, bg='white')
-        self.canvas.pack(pady=10)
+        # Controls
+        control_frame = tk.Frame(root)
+        control_frame.pack()
 
-        # Bitstream output
-        self.bit_label = tk.Label(root, text="Raw Bits:")
-        self.bit_label.pack()
-        self.bit_box = tk.Text(root, height=5, width=120)
+        tk.Label(control_frame, text="Photon Count:").pack(side=tk.LEFT)
+        self.count_entry = tk.Entry(control_frame, width=6)
+        self.count_entry.insert(0, "50")
+        self.count_entry.pack(side=tk.LEFT)
+
+        tk.Button(control_frame, text="Start Simulation", command=self.start_simulation).pack(side=tk.LEFT)
+
+        self.bit_box = tk.Text(root, height=3, width=100)
         self.bit_box.pack()
 
-        # Entropy plot
-        self.fig, self.ax = plt.subplots(figsize=(7, 3))
-        self.plot_canvas = FigureCanvasTkAgg(self.fig, master=root)
-        self.plot_canvas.get_tk_widget().pack()
+        self.status = tk.StringVar()
+        tk.Label(root, textvariable=self.status).pack()
 
-    def draw_photon_paths(self):
-        self.canvas.delete("all")
-        self.canvas.create_rectangle(60, 110, 90, 140, fill="red")  # Laser
-        self.canvas.create_text(75, 100, text="Laser", font=("Arial", 8))
+        # Plotting area
+        self.fig, self.ax = plt.subplots(figsize=(6, 2.5))
+        self.canvas_plot = FigureCanvasTkAgg(self.fig, master=root)
+        self.canvas_plot.get_tk_widget().pack()
 
-        self.canvas.create_line(90, 125, 160, 125, fill="red", width=2)  # Beam
-        self.canvas.create_rectangle(160, 105, 190, 145, fill="lightgray")  # Polarizer
-        self.canvas.create_text(175, 95, text="45° Polarizer", font=("Arial", 8))
+    def setup_circuit(self):
+        c = self.canvas
+        c.create_rectangle(30, 110, 60, 140, fill="red")
+        c.create_text(45, 100, text="Laser")
+        c.create_rectangle(160, 105, 190, 145, fill="gray")
+        c.create_text(175, 95, text="Polarizer")
+        c.create_rectangle(250, 105, 280, 145, fill="cyan")
+        c.create_text(265, 95, text="PBS")
+        c.create_oval(345, 120, 355, 130, fill="green")
+        c.create_text(360, 140, text="P Detector")
+        c.create_oval(260, 45, 270, 55, fill="orange")
+        c.create_text(290, 50, text="S Detector")
 
-        self.canvas.create_line(190, 125, 250, 125, fill="red", width=2)  # Beam to PBS
-        self.canvas.create_rectangle(250, 105, 280, 145, fill="cyan")  # PBS
-        self.canvas.create_text(265, 95, text="PBS", font=("Arial", 8))
-
-        for i, path in enumerate(self.paths[:30]):  # Show only first 30 photons
-            x = 250
-            y = 125
-            if path == 'P':
-                end_x = 350
-                end_y = 125
-                color = "green"
-            else:
-                end_x = 265
-                end_y = 50
-                color = "orange"
-            self.canvas.create_oval(x-2, y-2, x+2, y+2, fill=color)
-            self.canvas.create_line(x, y, end_x, end_y, fill=color, width=1)
-
-        self.canvas.create_oval(345, 120, 355, 130, fill="green")  # P-detector
-        self.canvas.create_text(355, 140, text="P", font=("Arial", 8))
-
-        self.canvas.create_oval(260, 45, 270, 55, fill="orange")  # S-detector
-        self.canvas.create_text(275, 45, text="S", font=("Arial", 8))
-
-    def run_simulation(self):
+    def start_simulation(self):
         try:
-            self.photons = int(self.entry.get())
+            self.count = int(self.count_entry.get())
         except:
-            self.photons = 500
+            self.count = 50
 
-        self.paths = emit_photons(self.photons)
-        signals = generate_photodiode_signals(self.paths)
-        self.raw_bits = arduino_logic(signals)
-        self.processed_bits = von_neumann(self.raw_bits)
+        self.bitstream.clear()
+        self.post_bits.clear()
+        self.canvas.delete("all")
+        self.setup_circuit()
+        self.status.set("Running...")
 
-        # Update bit display
+        threading.Thread(target=self.simulate_photons).start()
+
+    def simulate_photons(self):
+        for i in range(self.count):
+            delay = random.randint(30, 100)  # Arrival randomness
+            time.sleep(delay / 1000)
+
+            if ENABLE_ARDUINO:
+                try:
+                    line = arduino.readline().decode().strip()
+                    if line in ['0', '1']:
+                        bit = line
+                    else:
+                        bit = random.choice(['0', '1'])
+                except:
+                    bit = random.choice(['0', '1'])
+            else:
+                bit = random.choice(['0', '1'])
+
+            path = 'P' if bit == '1' else 'S'
+            photon = Photon(self.canvas, path)
+
+            while True:
+                photon.move_step()
+                if (photon.path == 'P' and photon.x >= 345) or (photon.path == 'S' and photon.y <= 55):
+                    self.canvas.delete(photon.id)
+                    self.bitstream.append(bit)
+                    self.update_bitstream_display()
+                    self.play_beep()
+                    break
+                time.sleep(0.005)  # Increased photon speed
+
+        self.status.set("Simulation complete.")
+        self.process_post_bits()
+        self.plot_entropy()
+
+    def update_bitstream_display(self):
         self.bit_box.delete("1.0", tk.END)
-        self.bit_box.insert(tk.END, f"Raw Bits:   {''.join(self.raw_bits[:100])}...\n")
-        self.bit_box.insert(tk.END, f"Post Bits:  {''.join(self.processed_bits[:100])}...\n")
-        self.bit_box.insert(tk.END, f"Raw Count: {len(self.raw_bits)} | Post-Processed Count: {len(self.processed_bits)}")
+        self.bit_box.insert(tk.END, f"Raw: {''.join(self.bitstream[-60:])}\n")
 
-        # Redraw photon paths
-        self.draw_photon_paths()
+    def play_beep(self):
+        if platform.system() == "Windows":
+            winsound.Beep(800, 100)
+        else:
+            os.system('printf "\\a"')  # Cross-platform fallback beep
 
-        # Plot entropy
-        raw_entropy = calculate_entropy(self.raw_bits)
-        post_entropy = calculate_entropy(self.processed_bits)
+    def von_neumann(self, bits):
+        result = []
+        for i in range(0, len(bits) - 1, 2):
+            if bits[i] != bits[i+1]:
+                result.append('0' if bits[i] == '0' else '1')
+        return result
+
+    def process_post_bits(self):
+        self.post_bits = self.von_neumann(self.bitstream)
+        self.bit_box.insert(tk.END, f"Post: {''.join(self.post_bits[-60:])}\n")
+
+    def calculate_entropy(self, bits, window=20):
+        entropies = []
+        for i in range(0, len(bits) - window + 1, window):
+            segment = bits[i:i+window]
+            p0 = segment.count('0') / window
+            p1 = segment.count('1') / window
+            entropy = -(p0 * log2(p0) + p1 * log2(p1)) if p0 > 0 and p1 > 0 else 0
+            entropies.append(entropy)
+        return entropies
+
+    def plot_entropy(self):
+        raw_entropy = self.calculate_entropy(self.bitstream)
+        post_entropy = self.calculate_entropy(self.post_bits)
+
         self.ax.clear()
-        self.ax.plot(raw_entropy, label="Raw Entropy", color='blue')
-        self.ax.plot(post_entropy, label="Post-Processed Entropy", color='green')
-        self.ax.set_ylim(0, 1.05)
+        self.ax.plot(raw_entropy, label="Raw", color='blue')
+        self.ax.plot(post_entropy, label="Post", color='green')
         self.ax.set_title("Entropy Graph")
+        self.ax.set_ylim(0, 1.05)
         self.ax.set_ylabel("Entropy")
-        self.ax.set_xlabel("Window Index")
         self.ax.legend()
-        self.plot_canvas.draw()
+        self.canvas_plot.draw()
 
 
-# --- Run the App ---
+# Run it
 if __name__ == "__main__":
     root = tk.Tk()
     app = QRNGApp(root)
